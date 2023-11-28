@@ -1,4 +1,5 @@
 #include <stdio.h>
+#include <math.h>
 #include <cuda_runtime.h>
 
 void checkCuda(cudaError_t err){
@@ -7,6 +8,11 @@ void checkCuda(cudaError_t err){
         exit(EXIT_FAILURE); 
     }
 }
+
+struct {
+    int x;
+    int y;
+}Tpoint;
 
 __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
     assert(blockIdx.x == 0); // only for one block
@@ -141,7 +147,6 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
     int Qt = (threadIdx.x-tidx)/d; // pair idx in its block 
     int gbx = Qt + blockIdx.x*(blockDim.x/d); // pair idx for all
     int i = blockIdx.x * blockDim.x + threadIdx.x;
-
     int sizeA=Apoint[gbx+1]-Apoint[gbx];
     int sizeB=Apoint[gbx+1]-Apoint[gbx];
 
@@ -198,10 +203,83 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
     __syncthreads();
 }
 
+void mergeInKernal(int *sA,int *sB,int sizeA,int sizeB,int *M,int elemIdx){
+    // only solve parallel merge on shared memory for [sA,eA) and [sB,eB) and store result in M
+    // elemIdx notes the position this thread in charge in M
+    // iterate x in B; y in A;
+    int Kx,Ky,Px,Py; // K low; P high;
+    if(elemIdx>sizeA){
+        Kx = elemIdx - sizeA;
+        ky = sizeA;
+        Px = sizeA;
+        Py = elemIdx - sizeA;
+    }else{
+        Kx = 0;
+        Ky = elemIdx;
+        Px = elemIdx;
+        Py = 0;
+    }
+    while(1){
+        int offset = abs(Ky - Py) / 2;
+        int Qx = Kx + offset;
+        int Qy = Ky - offset;
+
+        if (Qy >= 0 && Qx <= sizeB &&
+            (Qy == sizeA || Qx == 0 || sA[Qy] > sB[Qx - 1])) {
+            if (Qx == sizeB || Qy == 0 || A[Qy - 1] <= sB[Qx]) {
+                if (Qy < sizeA && (Qx == sizeB || sA[Qy] <= sB[Qx])) {
+                    M[elemIdx] = sA[Qy];
+                } else {
+                    M[elemIdx] = sB[Qx];
+                }
+                break;
+            } else { 
+                Kx = Qx + 1;
+                Ky = Qy - 1;
+            }
+        } else {
+            Px = Qx - 1;
+            Py = Qy + 1;
+        }
+    }
+    return;
+}
+
 __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
-    // 1.sort Mi using mergeSmallBatch?
-    // 2.recursively merge 2 large array
-    
+    // 1.sort Mi using mergeSmallBatch? Each Block covers entiere array of M in 1st stage log(d)
+    // 2.recursively merge 2 large array -> mergeSmallBlocks log(N)
+    // better d >= num of threads per block
+    int idx = blockIdx.x * blockDim.x + threadIdx.x; // global idx
+    int elemIdx = threadIdx.x%d; // element idx in one array
+    int arrIdxBlk = (threadIdx.x-tidx)/d; // local array idx in this block
+    int arrIdxAll = arrIdxBlk + blockIdx.x*(blockDim.x/d); // global array idx
+
+    // copy to shared memory, only copy needed
+    // m -- M
+    extern __shared__ int buff[];
+    int *m;
+    int *m2;
+    m = buff;
+    m2 = buff + arrIdxBlk*d;
+    if((threadIdx.x+d-1)/d>arrIdxBlk){
+        m[arrIdxBlk*d + elemIdx] = M[Mpoint[arrIdxAll]+elemIdx];
+    }
+    __syncthreads();
+    int subfix = tidx;
+    int level = tidx; // till ceil(log2(d)) level
+    int cover = 1;
+    int sib;
+    // stage1:split array to 1 element and merge sort
+    // simple strategy: each time, merge 2 neighbor(greedy)
+    // worst case 1/3 threads idle, promise log(d)?
+    while((threadIdx.x+d-1)/d>arrIdxBlk){
+        sib = subfix%2;
+        if(!(subfix=d-1&&subfix%2==0)){ 
+            mergeInKernal(m+cover*(subfix/2)*2,m+cover*(subfix/2)*2+cover,cover,cover,m2,threadIdx.x%2);
+        }
+        subfix/=2;
+        cover*=2;
+    }
 }
 
 // TODO 
@@ -247,8 +325,6 @@ void wrapper(int sizeA,int sizeB,int limit){
         printf("%d ", result[i]);
     }
     printf("\n");
-
-    return 0;
 }
 
 
