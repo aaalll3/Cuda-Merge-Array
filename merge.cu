@@ -1,5 +1,7 @@
 #include <stdio.h>
+#include <stdlib.h>
 #include <math.h>
+#include <time.h>
 #include <cuda_runtime.h>
 
 void checkCuda(cudaError_t err){
@@ -8,6 +10,10 @@ void checkCuda(cudaError_t err){
         exit(EXIT_FAILURE); 
     }
 }
+
+const int GridSize = 128;
+const int BlockSize = 1024;
+const int MemSize = 2**20;
 
 struct {
     int x;
@@ -203,7 +209,7 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
     __syncthreads();
 }
 
-void mergeInKernal(int *sA,int *sB,int sizeA,int sizeB,int *M,int elemIdx){
+__device__ void mergeInKernal(int *sA,int *sB,int sizeA,int sizeB,int *M,int elemIdx){
     // only solve parallel merge on shared memory for [sA,eA) and [sB,eB) and store result in M
     // elemIdx notes the position this thread in charge in M
     // iterate x in B; y in A;
@@ -282,10 +288,95 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
     }
 }
 
+__device__ void mergeLargeBlocks(int *M, int *Mpoint, int Num, int d){
+//TODO
+}
+
+__device__ void sortSmallBatch(int *M,int *Mpoint, int Num, int d){
+//TODO
+}
 // TODO 
 // 1. wrapper and random generator of arrays
 // 2. complete sortSmallBatch_k
 // 3. debug
+
+typedef int (*Compare)(const void*,const void*);
+
+int compare_little(const void* a, const void *b){
+    return (*(const int*)a - *(const int*)b);
+}
+
+int compare_large(const void* a, const void *b){
+    return (*(const int*)b - *(const int*)a);
+}
+
+void randomArray(int *arr, int number, int limit, bool sorted){
+    // malloc(buff,sizeof(int)*number);
+    for(int i = 0;i<number;i++){
+        arr[i]=rand()%limit;
+    }
+    if (sorted){
+        qsort(arr, number, sizeof(int),compare_little);
+    }
+    return;
+}
+
+bool checkOrder(int *arr, int size, Compare cmp){
+    for(int i = 0; i < size-1; i++){
+        if (!cmp(arr[i],arr[i+1])){
+            return false;
+        }
+    }
+    return true;
+}
+
+void wrapper_q1(int sizeA,int sizeB,int limit){
+    int gridSize = GridSize;
+    int blockSize = BlockSize;
+    int memSize = MemSize;
+    bool sorted = 1;
+    // play with memory
+    int *A,*B,*M;
+    A = malloc(sizeA*sizeof(int));
+    B = malloc(sizeB*sizeof(int));
+    M = malloc((sizeA+sizeB)*sizeof(int));
+    randomArray(A,sizeA,limit,sorted);
+    randomArray(B,sizeB,limit,sorted);
+    // to cuda
+    int *d_A, *d_B, *d_M;
+    cudaMalloc((void**)&d_A, sizeA * sizeof(int));
+    cudaMalloc((void**)&d_B, sizeB * sizeof(int));
+    cudaMalloc((void**)&d_M, (sizeA + sizeB) * sizeof(int));
+    cudaMemcpy(d_A, A, sizeA*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, sizeB*sizeof(int), cudaMemcpyHostToDevice);
+
+    mergeSmall_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,sizeA,sizeB);    
+
+    cudaMemcpy(d_M, M, (sizeA+sizeB)*sizeof(int), cudaMemcpyDeviceToHost);
+
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_M);
+
+    if(checkOrder(M,sizeA+sizeB,compare_little)){
+        printf("Array M is correct");
+    }else{
+        printf("Array M is incorrect");
+    }
+    free(A);
+    free(B);
+    free(M);
+    return;
+}
+
+void wrapper_q2(int sizeA,int sizeB,int limit){
+    
+}
+
+void wrapper_q5(int sizeA,int sizeB,int limit){
+    
+}
+
 void wrapper(int sizeA,int sizeB,int limit){
     int *buff;
     int maxsize = sizeA>sizeB?sizeA:sizeB;
