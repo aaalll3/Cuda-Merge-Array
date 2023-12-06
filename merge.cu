@@ -113,13 +113,23 @@ __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
     __syncthreads();
 }
 
-__global__ void mergeSmallBlocks_k(int *A, int *B, int *M, int sizeA, int sizeB, int sx, int sy, int ex, int ey) {
+__global__ void mergeLarge_k(int *A, int *B, int *M, int sizeA, int sizeB, int *result) {
+    // NOTICE result should be on GPU
     // only locates sufficiant array to each block's shared memory, other not in shared memory ==> pass
     // each block's resposible for [startm,endm) <= d in potential result array M
     // x in array B, and y in array A
     // To do so, we spilit Array A in a idx serie y, resp. B in x before inter kernel func
     // (sx,sy) notes startm, (ex,ey) notes endm with sx+sy = startm, ex+ey = endm
     // to simplify, we assume sizesubA + sizesubB = d <= thread num in block
+
+    // we decide the partition uniformly
+    int block_num = blockDim.x;
+    int bidx = blockIdx.x;
+    int sx,sy,ex,ey;
+    sx = result[2*bidx];
+    sy = result[2*bidx+1];
+    ex = result[2*(bidx+1)];
+    ey = result[2*(bidx+1)+1];
     assert(blockDim.x >= ex+ey-sx-sy); // simplicity check
 
     int elemIdx = threadIdx.x;
@@ -324,8 +334,24 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
     }
 }
 
-__global__ void mergeLargeBlocks(int *M, int *Mpoint, int Num, int d){
+__global__ void mergeLargeBlocks(int *A, int *Mpoint, int Num, int *d){
     //stage2:merge large array from Mi to Mi/2 and reset Mpoint
+    //Mpoint is the idx of each Marray in M, i.e. the prefix sum of number in array
+    //Mpoint[0...Num-1] with Num elements
+    //each Mi array contains d elements
+    int idx = blockIdx.x * blockDim.x + threadIdx.x; // global idx
+    int elemIdx = threadIdx.x%(*d); // element idx in one array
+    int arrIdxBlk = (threadIdx.x-elemIdx)/(*d); // local array idx in this block
+    int arrIdxAll = arrIdxBlk + blockIdx.x*(blockDim.x/(*d)); // global array idx
+    int sizeM = Mpoint[arrIdxAll+1] - Mpoint[arrIdxAll];
+    //copy to shared memory
+    extern __shared__ int buff[];
+    int *a,*b,*m;
+    int sizeA = Mpoint[];
+    int sizeB = Mpoint[];
+    a = buff;
+    b = buff + sizeof(int)*sizeA;
+    d = sizeA + sizeB;
 }
     
 // TODO 
@@ -363,6 +389,49 @@ bool checkOrder(int *arr, int size, Compare cmp){
     return true;
 }
 
+void query(int*A,int *B, int sizeA,int sizeB, int qidx, int *coord){
+    if (qidx < sizeA + sizeB) {
+        //TODO
+        int Kx, Ky, Px, Py; // K for low point in diag(close to y axis), P for high(close to x axis)
+        if (elemIdx > sizeA) {
+            Kx = elemIdx - sizeA;
+            Ky = sizeA;
+            Px = sizeA;
+            Py = elemIdx - sizeA;
+        } else {
+            Kx = 0;
+            Ky = elemIdx;
+            Px = elemIdx;
+            Py = 0;
+        }
+
+        while (1) {
+            int offset = abs(Ky - Py) / 2;
+            int Qx = Kx + offset;
+            int Qy = Ky - offset;
+
+            if (Qy >= 0 && Qx <= sizeB &&
+                (Qy == sizeA || Qx == 0 || a[Qy] > b[Qx - 1])) {
+                if (Qx == sizeB || Qy == 0 || (Qy < sizeA && a[Qy - 1] <= b[Qx])) {
+                    coord[0]=Qx;
+                    coord[1]=Qy;
+                    return;
+                } else {
+                    Kx = Qx + 1;
+                    Ky = Qy - 1;
+                }
+            } else {
+                Px = Qx - 1;
+                Py = Qy + 1;
+            }
+        }
+    }else{
+        coord[0] = -1;
+        coord[1] = -1;
+        return;
+    }
+}
+
 void wrapper_q1(int sizeA,int sizeB,int limit){
     int gridSize = GridSize;
     int blockSize = BlockSize;
@@ -371,6 +440,7 @@ void wrapper_q1(int sizeA,int sizeB,int limit){
     float timems = 0;
     cudaEvent_t start, stop; //cuda timer
     cudaEventCreate(&start);
+    cudaEventCreate(&stop);
     // play with memory
     int *A,*B,*M;
     A = malloc(sizeA*sizeof(int));
@@ -412,10 +482,135 @@ void wrapper_q1(int sizeA,int sizeB,int limit){
 }
 
 void wrapper_q2(int sizeA,int sizeB,int limit){
+    int gridSize = GridSize;
+    int blockSize = BlockSize;
+    int memSize = MemSize;
+    bool sorted = 1;
+    float timems = 0;
+    cudaEvent_t start, stop; //cuda timer
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    // play with memory
+    int *A,*B,*M;
+    A = malloc(sizeA*sizeof(int));
+    B = malloc(sizeB*sizeof(int));
+    M = malloc((sizeA+sizeB)*sizeof(int));
+    randomArray(A,sizeA,limit,sorted);
+    randomArray(B,sizeB,limit,sorted);
+    // to cuda
+    // to cuda
+    int *d_A, *d_B, *d_M;
+    cudaMalloc((void**)&d_A, sizeA * sizeof(int));
+    cudaMalloc((void**)&d_B, sizeB * sizeof(int));
+    cudaMalloc((void**)&d_M, (sizeA + sizeB) * sizeof(int));
+    cudaMemcpy(d_A, A, sizeA*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, sizeB*sizeof(int), cudaMemcpyHostToDevice);
+    //split uniformly
+    int num = (sizeA+sizeB+gridSize-1)/gridSize;
+    int result[2*(gridSize+1)];
+    for(int i = 0;i<gridSize;i++){
+        query(A,B,sizeA,sizeB,num*i,result[i*2])
+    }
+    result[2*gridSize]=sizeA;
+    result[2*gridSize+1]=sizeB
+    int *d_result;
+    cudaMalloc((void**)&d_result, 2*(gridSize+1)* sizeof(int));
+    cudaMemcpy(d_result, result, 2*(gridSize+1)* sizeof(int), cudaMemcpyHostToDevice)
+
+    cudaEventRecord(start);
+    mergeLarge_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,sizeA,sizeB,result);    
+    cudaEventRecord(stop);
+
+    cudaMemcpy(d_M, M, (sizeA+sizeB)*sizeof(int), cudaMemcpyDeviceToHost);
+
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&timems, start, stop);
+    pritnf("kernel spent time: %f ms\n",timems);
+
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_M);
+
+    if(checkOrder(M,sizeA+sizeB,compare_little)){
+        printf("Array M is correct");
+    }else{
+        printf("Array M is incorrect");
+    }
+    free(A);
+    free(B);
+    free(M);
+    return;
+}
+
+void wrapper_q5(int sizeA,int sizeB, int num, int limit){
+    // d is sizeA + sizeB
+    // sizeA*num
+    // sizeB*num
+    int gridSize = GridSize;
+    int blockSize = BlockSize;
+    int memSize = MemSize;
+    bool sorted = 1;
+    float timems = 0;
+    cudaEvent_t start, stop; //cuda timer
+    cudaEventCreate(&start);
+    // play with memory
+    int *A,*B,*M;
+    int *Apoint,*Bpoint;
+    A = malloc(sizeA*num*sizeof(int));
+    B = malloc(sizeB*num*sizeof(int));
+    M = malloc((sizeA+sizeB)*num*sizeof(int));
+    Apoint = malloc(num*sizeof(int));
+    Bpoint = malloc(num*sizeof(int));
+    for(int i=0;i<num;i++){
+        if(i){
+            Apoint[i]=Apoint[i-1]+sizeA;
+            Bpoint[i]=Bpoint[i-1]+sizeB;
+        }else{
+            Apoint[0]=0;
+            Bpoint[0]=0;
+        }
+        randomArray(A+sizeA*i,sizeA,limit,sorted);
+        randomArray(B+sizeB*i,sizeB,limit,sorted);
+    }    
+    // to cuda
+    int *d_A, *d_B, *d_M,*d_Apoint,*d_Bpoint;
+    cudaMalloc((void**)&d_A, sizeA*num*sizeof(int));
+    cudaMalloc((void**)&d_B, sizeB*num*sizeof(int));
+    cudaMalloc((void**)&d_M, (sizeA+sizeB)*num* sizeof(int));
+    cudaMalloc((void**)&d_Apoint, num*sizeof(int));
+    cudaMalloc((void**)&d_Bpoint, num*sizeof(int));
+    cudaMemcpy(d_A, A, sizeA*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, sizeB*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Apoint, Apoint, num*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Bpoint, Bpoint, num*sizeof(int), cudaMemcpyHostToDevice);
+
+    cudaEventRecord(start);
+    mergeSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,Apoint,Bpoint,num,sizeA+sizeB);    
+    cudaEventRecord(stop);
+
+    cudaMemcpy(d_M, M, (sizeA+sizeB)*sizeof(int), cudaMemcpyDeviceToHost);
+
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&timems, start, stop);
+    pritnf("kernel spent time: %f ms\n",timems);
+
+    cudaFree(d_A);
+    cudaFree(d_B);
+    cudaFree(d_M);
+
+    if(checkOrder(M,sizeA+sizeB,compare_little)){
+        printf("Array M is correct");
+    }else{
+        printf("Array M is incorrect");
+    }
+    free(A);
+    free(B);
+    free(M);
+    return;
     
 }
 
-void wrapper_q5(int sizeA,int sizeB,int limit){
+void wrapper_q6(int sizeA, int sizeB, int limit){
     
 }
 
