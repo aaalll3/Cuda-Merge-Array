@@ -254,7 +254,7 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
     __syncthreads();
 }
 
-// 3 funtino for mergesort
+// 2 funtion for mergesort
 __device__ void mergeInKernal(int *sA,int *sB,int sizeA,int sizeB,int *M,int elemIdx){
     // only solve parallel merge on shared memory for [sA,eA) and [sB,eB) and store result in M
     // elemIdx notes the position this thread in charge in M
