@@ -332,28 +332,11 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
         subfix/=2;
         cover*=2;
     }
+    if(threadIdx.x < d){
+        M[threadIdx.x] = m2[threadIdx.x];
+    }
 }
 
-__global__ void mergeLargeBlocks(int *A, int *Mpoint, int Num, int *d){
-    //stage2:merge large array from Mi to Mi/2 and reset Mpoint
-    //Mpoint is the idx of each Marray in M, i.e. the prefix sum of number in array
-    //Mpoint[0...Num-1] with Num elements
-    //each Mi array contains d elements
-    int idx = blockIdx.x * blockDim.x + threadIdx.x; // global idx
-    int elemIdx = threadIdx.x%(*d); // element idx in one array
-    int arrIdxBlk = (threadIdx.x-elemIdx)/(*d); // local array idx in this block
-    int arrIdxAll = arrIdxBlk + blockIdx.x*(blockDim.x/(*d)); // global array idx
-    int sizeM = Mpoint[arrIdxAll+1] - Mpoint[arrIdxAll];
-    //copy to shared memory
-    extern __shared__ int buff[];
-    int *a,*b,*m;
-    int sizeA = Mpoint[];
-    int sizeB = Mpoint[];
-    a = buff;
-    b = buff + sizeof(int)*sizeA;
-    d = sizeA + sizeB;
-}
-    
 // TODO 
 // 1. wrapper and random generator of arrays
 // 2. complete sortSmallBatch_k
@@ -553,15 +536,16 @@ void wrapper_q5(int sizeA,int sizeB, int num, int limit){
     float timems = 0;
     cudaEvent_t start, stop; //cuda timer
     cudaEventCreate(&start);
+    cudaEventCreate(&stop);
     // play with memory
     int *A,*B,*M;
     int *Apoint,*Bpoint;
     A = malloc(sizeA*num*sizeof(int));
     B = malloc(sizeB*num*sizeof(int));
     M = malloc((sizeA+sizeB)*num*sizeof(int));
-    Apoint = malloc(num*sizeof(int));
-    Bpoint = malloc(num*sizeof(int));
-    for(int i=0;i<num;i++){
+    Apoint = malloc((num+1)*sizeof(int));
+    Bpoint = malloc((num+1)*sizeof(int));
+    for(int i=0;i<=num;i++){
         if(i){
             Apoint[i]=Apoint[i-1]+sizeA;
             Bpoint[i]=Bpoint[i-1]+sizeB;
@@ -577,12 +561,12 @@ void wrapper_q5(int sizeA,int sizeB, int num, int limit){
     cudaMalloc((void**)&d_A, sizeA*num*sizeof(int));
     cudaMalloc((void**)&d_B, sizeB*num*sizeof(int));
     cudaMalloc((void**)&d_M, (sizeA+sizeB)*num* sizeof(int));
-    cudaMalloc((void**)&d_Apoint, num*sizeof(int));
-    cudaMalloc((void**)&d_Bpoint, num*sizeof(int));
-    cudaMemcpy(d_A, A, sizeA*sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_B, B, sizeB*sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_Apoint, Apoint, num*sizeof(int), cudaMemcpyHostToDevice);
-    cudaMemcpy(d_Bpoint, Bpoint, num*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMalloc((void**)&d_Apoint, (num+1)*sizeof(int));
+    cudaMalloc((void**)&d_Bpoint, (num+1)*sizeof(int));
+    cudaMemcpy(d_A, A, num*sizeA*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_B, B, num*sizeB*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Apoint, Apoint, (num+1)*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Bpoint, Bpoint, (num+1)*sizeof(int), cudaMemcpyHostToDevice);
 
     cudaEventRecord(start);
     mergeSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,Apoint,Bpoint,num,sizeA+sizeB);    
@@ -610,51 +594,60 @@ void wrapper_q5(int sizeA,int sizeB, int num, int limit){
     
 }
 
-void wrapper_q6(int sizeA, int sizeB, int limit){
-    
-}
+void wrapper_q6(int d, int num, int limit){
+    int gridSize = GridSize;
+    int blockSize = BlockSize;
+    int memSize = MemSize;
+    bool sorted = 0;
+    float timems = 0;
+    cudaEvent_t start, stop; //cuda timer
+    cudaEventCreate(&start);
+    cudaEventCreate(&stop);
+    // play with memory
+    int *M,*R;
+    int *Mpoint;
+    M = malloc((d)*num*sizeof(int));
+    Mpoint = malloc((num+1)*sizeof(int));
+    for(int i=0;i<num;i++){
+        if(i){
+            Mpoint[i]=Mpoint[i-1]+d;
+        }else{
+            Mpoint[0]=0
+        }
+        randomArray(M+d*i,d,limit,sorted);
+    }    
+    // to cuda
+    int *d_M, *d_R,*d_Mpoint;
+    cudaMalloc((void**)&d_M, d*num* sizeof(int));
+    // cudaMalloc((void**)&d_R, d*num* sizeof(int));
+    cudaMalloc((void**)&d_Mpoint, (num+1)*sizeof(int));
+    cudaMemcpy(d_M, M, d*sizeof(int), cudaMemcpyHostToDevice);
+    cudaMemcpy(d_Mpoint, Bpoint, (num+1)*sizeof(int), cudaMemcpyHostToDevice);
 
-void wrapper(int sizeA,int sizeB,int limit){
-    int *buff;
-    int maxsize = sizeA>sizeB?sizeA:sizeB;
-    int blockSize = 256;
-    int gridSize = (sizeA + sizeB + blockSize - 1) / blockSize;
+    cudaEventRecord(start);
+    //stage1
+    sortSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_M,Mpoint,num,d);
+    cudaEventRecord(stop);
 
-    // Allocate memory on the GPU
-    int *d_A, *d_B, *d_M;
-    cudaMalloc((void**)&d_A, sizeA * sizeof(int));
-    cudaMalloc((void**)&d_B, sizeB * sizeof(int));
-    cudaMalloc((void**)&d_M, (sizeA + sizeB) * sizeof(int));
-    // Copy data from CPU to GPU
-    srand(time(NULL));
-    malloc(buff,sizeof(int)*sizeA);
-    for(int i = 0;i<maxsize;i++){
-        buff[i]=rand()%limit;
-    }
-    cudaMemcpy(d_A, buff, sizeA * sizeof(int), cudaMemcpyHostToDevice);
-    for(int i = 0;i<sizeB;i++){
-        buff[i]=rand()%limit;
-    }
-    cudaMemcpy(d_B, B, sizeB * sizeof(int), cudaMemcpyHostToDevice);
-    
-    mergeSmall_k<<<gridSize, blockSize>>>(d_A, d_B, d_M, sizeA, sizeB);
+    cudaMemcpy(d_M, M, num*d*sizeof(int), cudaMemcpyDeviceToHost);
 
-    int result[sizeA + sizeB];
-    cudaMemcpy(result, d_M, (sizeA + sizeB) * sizeof(int), cudaMemcpyDeviceToHost);
+    cudaEventSynchronize(stop);
+    cudaEventElapsedTime(&timems, start, stop);
+    pritnf("kernel spent time: %f ms\n",timems);
 
-    // Free allocated memory
-    cudaFree(d_A);
-    cudaFree(d_B);
     cudaFree(d_M);
+    cudaFree(d_R);
+    cudaFree(d_Mpoint);
 
-    // Print the merged array
-    printf("Merged Array: ");
-    for (int i = 0; i < sizeA + sizeB; i++) {
-        printf("%d ", result[i]);
+    if(checkOrder(M,sizeA+sizeB,compare_little)){
+        printf("Array M is correct");
+    }else{
+        printf("Array M is incorrect");
     }
-    printf("\n");
+    free(M);
+    free(Mpoint);
+    return;
 }
-
 
 int main() {
     int sizeA, sizeB, limit;
