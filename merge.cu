@@ -298,8 +298,7 @@ __device__ void mergeInKernal(int *sA,int *sB,int sizeA,int sizeB,int *M,int ele
 }
 
 __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
-    // 1.sort Mi using mergeSmallBatch? Each Block covers entiere array of M in 1st stage log(d)
-    // 2.recursively merge 2 large array -> mergeSmallBlocks log(N)
+    // sort Mi using mergeSmallBatch? Each Block covers entiere array of M in 1st stage log(d)
     // better d >= num of threads per block
     // Mpoint is the the start idx of each Mi array in M, i.e prefixsum of sizeMi;
     int idx = blockIdx.x * blockDim.x + threadIdx.x; // global idx
@@ -311,28 +310,69 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
 
     // copy to shared memory, only copy needed
     // m -- M
-    extern __shared__ int buff[];
-    int *m, *m2;
-    m = buff + arrIdxBlk*d;
-    m2 = buff + arrIdxBlk*d + sizeof(int)*;
-    if((threadIdx.x+d-1)/d>arrIdxBlk){
+    extern __shared__ int buff[];//total:(4d+2)*arrnum d of elements, d of buffer for sort, 2*(d+1) for prefix sum of merge tree
+    int *m, *m2, *preSumM1,*preSumM2;
+    m = buff + arrIdxBlk*(4*d+2);
+    m2 = m + d;
+    preSumM1 = m2 + d;  // 
+    preSumM2 = preSumM1 + d+1;
+    if(arrIdxBlk<blockDim.x/d){ // valid thread number
         m[arrIdxBlk*d + elemIdx] = M[Mpoint[arrIdxAll]+elemIdx];
     }
+    if(arrIdxBlk<blockDim.x/d){
+        preSumM1[elemIdx] = elemIdx;
+        preSumM2[elemIdx] = elemIdx;
+    }
+    if(tidx==0){
+        preSumM1[d]=d;
+        preSumM2[d]=d;
+    }
     __syncthreads();
-    int subfix = tidx; // till ceil(log2(d)) level
-    int cover = 1;
+    int hidx = tidx; // till ceil(log2(d)) level
     // stage1:split array to 1 element and merge sort
     // simple strategy: each time, merge 2 neighbor(greedy)
     // worst case 1/3 threads idle, promise log(d)?
-    while((threadIdx.x+d-1)/d>arrIdxBlk){
-        if(!(subfix=d-1&&subfix%2==0)){ 
-            mergeInKernal(m+cover*(subfix/2)*2,m+cover*(subfix/2)*2+cover,cover,cover,m2,threadIdx.x%2);
+    // (threadIdx.x+d-1)/d>arrIdxBlk why? TODO
+    int turns = 0;
+    while(!(threadIdx.x+d-1)/d>arrIdxBlk){
+        if(!(hidx==d-1/pow(2,turns)&&hidx%2==0)){ 
+            //two case: hidx is odd -> paired
+            // hidx is even but not at end of serie -> paired
+            if(turns%2){// turns is even: save result in m2, odd in m1
+                // mergeInKernal(m2+cover*(hidx/2)*2,m2+cover*(hidx/2)*2+cover,cover,cover,m+,threadIdx.x%(cover*2));
+                mergeInKernal(m2+preSumM1[hidx/2*2], m2+preSumM1[hidx/2*2+1], // sA even , sB odd
+                    preSumM1[hidx/2*2+1]-preSumM1[hidx/2*2],preSumM1[hidx/2*2+2]-preSumM1[hidx/2*2+1], // sizeA, sizeB
+                    m+preSumM1[hidx/2*2], // sM
+                    threadIdx.x%(preSumM1[hidx/2*2+2]-preSumM1[hidx/2*2])); // elemen idx
+                if(hidx){
+                    preSumM1[hidx/2]=preSumM2[hidx/2*2]+preSumM2[hidx/2*2+1]-preSumM2[hidx/2*2-1];
+                }else{
+                    preSumM1[hidx/2]=preSumM2[hidx/2*2]+preSumM2[hidx/2*2+1];
+                }
+            }else{
+                // mergeInKernal(m+cover*(hidx/2)*2,m+cover*(hidx/2)*2+cover,cover,cover,m2+,threadIdx.x%(cover*2));
+                mergeInKernal(m+preSumM2[hidx/2*2], m2+preSumM2[hidx/2*2+1], // sA even , sB odd
+                    preSumM2[hidx/2*2+1]-preSumM2[hidx/2*2],preSumM2[hidx/2*2+2]-preSumM2[hidx/2*2+1], // sizeA, sizeB
+                    m2+preSumM2[hidx/2*2], // sM
+                    threadIdx.x%(preSumM2[hidx/2*2+2]-preSumM2[hidx/2*2])); // elemen idx
+                if(hidx){
+                    preSumM2[hidx/2]=preSumM1[hidx/2*2]+preSumM1[hidx/2*2+1]-preSumM1[hidx/2*2-1];
+                }else{
+                    preSumM2[hidx/2]=preSumM1[hidx/2*2]+preSumM1[hidx/2*2+1];
+                }
+            }
         }
-        subfix/=2;
+        hidx/=2;
         cover*=2;
+        turns+=1;
+        __syncthreads();
     }
-    if(threadIdx.x < d){
-        M[threadIdx.x] = m2[threadIdx.x];
+    if(!(threadIdx.x+d-1)/d>arrIdxBlk){
+        if(turns%2){// turns is even: result in m1, odd in m2, constrast with if in while
+            M[threadIdx.x] = m2[threadIdx.x];
+        }else{
+            M[threadIdx.x] = m1[threadIdx.x];
+        }
     }
 }
 
@@ -647,6 +687,6 @@ void wrapper_q6(int d, int num, int limit){
 
 int main() {
     int sizeA, sizeB, limit;
-    wrapper(sizeA,sizeB,limit);
+    wrapper_q1(sizeA,sizeB,limit);
     return 0;
 }
