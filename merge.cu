@@ -70,7 +70,6 @@ __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
     __syncthreads(); //copy to shared memory and synchronized
 
     if (elemIdx < sizeA + sizeB) {
-        //TODO
         int Kx, Ky, Px, Py; // K for low point in diag(close to y axis), P for high(close to x axis)
         if (elemIdx > sizeA) {
             Kx = elemIdx - sizeA;
@@ -338,9 +337,7 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
 }
 
 // TODO 
-// 1. wrapper and random generator of arrays
-// 2. complete sortSmallBatch_k
-// 3. debug
+// 1. debug
 
 typedef int (*Compare)(const void*,const void*);
 
@@ -374,7 +371,6 @@ bool checkOrder(int *arr, int size, Compare cmp){
 
 void query(int*A,int *B, int sizeA,int sizeB, int qidx, int *coord){
     if (qidx < sizeA + sizeB) {
-        //TODO
         int Kx, Ky, Px, Py; // K for low point in diag(close to y axis), P for high(close to x axis)
         if (elemIdx > sizeA) {
             Kx = elemIdx - sizeA;
