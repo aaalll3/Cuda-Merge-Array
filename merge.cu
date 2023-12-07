@@ -50,6 +50,7 @@ struct {
     An-1 K0
     (y axis)
 */ 
+//q1
 __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
     // for this simple case, we only consider enough threads solve enough elements
     // implemented the algorithm in paper
@@ -112,8 +113,14 @@ __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
     __syncthreads();
 }
 
+//q2
 __global__ void mergeLarge_k(int *A, int *B, int *M, int sizeA, int sizeB, int *result) {
-    // NOTICE result should be on GPU
+    // A: array A on GPU global memory
+    // B: array B on GPU global memory
+    // M: array M on GPU global memory
+    // sizeA: number of elements in A total
+    // sizeB: number of elements in B total
+    // result: array of all partition coordinates on GPU global memorys
     // only locates sufficiant array to each block's shared memory, other not in shared memory ==> pass
     // each block's resposible for [startm,endm) <= d in potential result array M
     // x in array B, and y in array A
@@ -122,74 +129,80 @@ __global__ void mergeLarge_k(int *A, int *B, int *M, int sizeA, int sizeB, int *
     // to simplify, we assume sizesubA + sizesubB = d <= thread num in block
 
     // we decide the partition uniformly
-    int block_num = blockDim.x;
-    int bidx = blockIdx.x;
     int sx,sy,ex,ey;
-    sx = result[2*bidx];
-    sy = result[2*bidx+1];
-    ex = result[2*(bidx+1)];
-    ey = result[2*(bidx+1)+1];
+    sx = result[2*blockIdx.x];
+    sy = result[2*blockIdx.x+1];
+    ex = result[2*(blockIdx.x+1)];
+    ey = result[2*(blockIdx.x+1)+1];
     assert(blockDim.x >= ex+ey-sx-sy); // simplicity check
 
-    int elemIdx = threadIdx.x;
     int sizesubA = ey - sy;
     int sizesubB = ex - sx;
-    extern __shared__ int buff[]; //total: 2*(sizesubA+sizesubB)
-    int *a,*b,*m;
-    a = buff;
-    b = buff+sizeof(int)*sizesubA;
-    m = buff+sizeof(int)*(sizesubA+sizesubB);
-    if(elemIdx >= 0 &&elemIdx <sizesubA){
-        a[elemIdx] = A[elemIdx + sy];
-    }else{
-        b[elemIdx-sizesubA] = B[elemIdx - sizesubA + sx];
-    }
-    __syncthreads(); //copy to shared memory and synchronized
+    int elemIdx = threadIdx.x%(sizesubA+sizesubB);
 
-    if (elemIdx < sizesubA + sizesubB) {
-        int Kx, Ky, Px, Py; // K for low point in diag, P for high
-        
-        if (elemIdx > sizesubA) {
-            Kx = elemIdx - sizesubA;
-            Ky = sizesubA;
-            Px = sizesubA;
-            Py = elemIdx - sizesubA;
-        } else {
-            Kx = 0;
-            Ky = elemIdx;
-            Px = elemIdx;
-            Py = 0;
+    if (threadIdx.x<sizesubA+sizesubB){
+        extern __shared__ int buff[]; //total: 2*(sizesubA+sizesubB)
+        int *a,*b,*m;
+        a = buff;
+        b = a+sizeof(int)*sizesubA;
+        m = b+sizeof(int)*sizesubB;
+        if(elemIdx <sizesubA){
+            a[elemIdx] = A[elemIdx + sy];
+        }else{
+            b[elemIdx-sizesubA] = B[elemIdx - sizesubA + sx];
         }
+        __syncthreads(); //copy to shared memory and synchronized
 
-        while (1) {
-            int offset = abs(Ky - Py) / 2;
-            int Qx = Kx + offset;
-            int Qy = Ky - offset;
+        if (elemIdx < sizesubA + sizesubB) {
+            int Kx, Ky, Px, Py; // K for low point in diag, P for high
 
-            if (Qy >= 0 && Qx <= sizesubB &&
-                (Qy == sizesubA || Qx == 0 || a[Qy] > b[Qx - 1])) {
-                if (Qx == sizesubB || Qy == 0 || (Qy < sizesubA && a[Qy - 1] <= b[Qx])) {
-                    if (Qy < sizesubA && (Qx == sizesubB || a[Qy] <= b[Qx])) {
-                        m[i] = a[Qy];  // Merge in M
-                    } else {
-                        m[i] = b[Qx];
-                    }
-                    break;
-                } else {
-                    Kx = Qx + 1;
-                    Ky = Qy - 1;
-                }
+            if (elemIdx > sizesubA) {
+                Kx = elemIdx - sizesubA;
+                Ky = sizesubA;
+                Px = sizesubA;
+                Py = elemIdx - sizesubA;
             } else {
-                Px = Qx - 1;
-                Py = Qy + 1;
+                Kx = 0;
+                Ky = elemIdx;
+                Px = elemIdx;
+                Py = 0;
+            }
+
+            while (1) {
+                int offset = abs(Ky - Py) / 2;
+                int Qx = Kx + offset;
+                int Qy = Ky - offset;
+
+                if (Qy >= 0 && Qx <= sizesubB &&
+                    (Qy == sizesubA || Qx == 0 || a[Qy] > b[Qx - 1])) {
+                    if (Qx == sizesubB || Qy == 0 || (Qy < sizesubA && a[Qy - 1] <= b[Qx])) {
+                        if (Qy < sizesubA && (Qx == sizesubB || a[Qy] <= b[Qx])) {
+                            m[i] = a[Qy];  // Merge in M
+                        } else {
+                            m[i] = b[Qx];
+                        }
+                        break;
+                    } else {
+                        Kx = Qx + 1;
+                        Ky = Qy - 1;
+                    }
+                } else {
+                    Px = Qx - 1;
+                    Py = Qy + 1;
+                }
             }
         }
+        M[elemIdx] = m[elemIdx];
+        __syncthreads();
     }
-    M[elemIdx] = m[elemIdx];
-    __syncthreads();
 }
 
+//q5
 __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoint, int Num int d){
+    // A:
+    // B:
+    // M:
+
     // Apoint(resp. Bpoint) is the start idx of each Ai array in A, i.e prefixsum of sizeAi;
     // Apoint idx in [0,Num] with Apoint[Num] is end idx A exclude
     // each block have one pair of AB, suppose sizeA+sizeB = d <= 1024
@@ -343,23 +356,25 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
                 mergeInKernal(m2+preSumM1[hidx/2*2], m2+preSumM1[hidx/2*2+1], // sA even , sB odd
                     preSumM1[hidx/2*2+1]-preSumM1[hidx/2*2],preSumM1[hidx/2*2+2]-preSumM1[hidx/2*2+1], // sizeA, sizeB
                     m+preSumM1[hidx/2*2], // sM
-                    threadIdx.x%(preSumM1[hidx/2*2+2]-preSumM1[hidx/2*2])); // elemen idx
-                if(hidx){
-                    preSumM1[hidx/2]=preSumM2[hidx/2*2]+preSumM2[hidx/2*2+1]-preSumM2[hidx/2*2-1];
-                }else{
-                    preSumM1[hidx/2]=preSumM2[hidx/2*2]+preSumM2[hidx/2*2+1];
-                }
+                    threadIdx.x-preSumM1[hidx/2]%(preSumM1[hidx/2*2+2]-preSumM1[hidx/2*2])); // elemen idx
+                preSumM1[hidx/2]=preSumM2[hidx/2*2];
+                // if(hidx){
+                //     preSumM1[hidx/2]=preSumM2[hidx/2*2]+preSumM2[hidx/2*2+1]-preSumM2[hidx/2*2-1];
+                // }else{
+                //     preSumM1[hidx/2]=preSumM2[hidx/2*2]+preSumM2[hidx/2*2+1];
+                // }
             }else{
                 // mergeInKernal(m+cover*(hidx/2)*2,m+cover*(hidx/2)*2+cover,cover,cover,m2+,threadIdx.x%(cover*2));
                 mergeInKernal(m+preSumM2[hidx/2*2], m2+preSumM2[hidx/2*2+1], // sA even , sB odd
                     preSumM2[hidx/2*2+1]-preSumM2[hidx/2*2],preSumM2[hidx/2*2+2]-preSumM2[hidx/2*2+1], // sizeA, sizeB
                     m2+preSumM2[hidx/2*2], // sM
                     threadIdx.x%(preSumM2[hidx/2*2+2]-preSumM2[hidx/2*2])); // elemen idx
-                if(hidx){
-                    preSumM2[hidx/2]=preSumM1[hidx/2*2]+preSumM1[hidx/2*2+1]-preSumM1[hidx/2*2-1];
-                }else{
-                    preSumM2[hidx/2]=preSumM1[hidx/2*2]+preSumM1[hidx/2*2+1];
-                }
+                preSumM2[hidx/2]=preSumM1[hidx/2*2];
+                // if(hidx){
+                //     preSumM2[hidx/2]=preSumM1[hidx/2*2]+preSumM1[hidx/2*2+1]-preSumM1[hidx/2*2-1];
+                // }else{
+                //     preSumM2[hidx/2]=preSumM1[hidx/2*2]+preSumM1[hidx/2*2+1];
+                // }
             }
         }
         hidx/=2;
