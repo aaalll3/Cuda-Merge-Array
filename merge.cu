@@ -121,7 +121,7 @@ __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
         if(elemIdx<sizeA){
             a[elemIdx] = A[elemIdx];
         }else{
-            b[elemIdx] = B[elemIdx];
+            b[elemIdx-sizeA] = B[elemIdx-sizeA];
         }
         __syncthreads(); //copy to shared memory and synchronized    
         mergeInKernal(a,b,sizeA,sizeB,m,elemIdx);
@@ -131,7 +131,7 @@ __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
 }
 
 //q2
-__global__ void mergeLarge_k(int *A, int *B, int *M, int sizeA, int sizeB, int *partition) {
+__global__ void mergeLarge_k(int *A, int *B, int *M, int d, int *partition) {
     // A: array A on GPU global memory
     // B: array B on GPU global memory
     // M: array M on GPU global memory
@@ -147,7 +147,7 @@ __global__ void mergeLarge_k(int *A, int *B, int *M, int sizeA, int sizeB, int *
 
     // we decide the partition uniformly
     extern __shared__ int buff[]; //total: 2*(sizesubA+sizesubB) == 2*d
-    if (threadIdx.x<sizesubA+sizesubB){
+    if (threadIdx.x<d){
         int sx,sy,ex,ey;
         sx = partition[2*blockIdx.x];
         sy = partition[2*blockIdx.x+1];
@@ -160,8 +160,8 @@ __global__ void mergeLarge_k(int *A, int *B, int *M, int sizeA, int sizeB, int *
         int elemIdx = threadIdx.x%(sizesubA+sizesubB);
         int *a,*b,*m;
         a = buff;
-        b = a+sizeof(int)*sizesubA;
-        m = b+sizeof(int)*sizesubB;
+        b = a+sizesubA;
+        m = b+sizesubB;
         if(elemIdx <sizesubA){
             a[elemIdx] = A[elemIdx + sy];
         }else{
@@ -197,8 +197,8 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
         //copy to shared memory and synchronized
         int *a,*b,*m;
         a = buff + arrIdxBlk*d; //thread assign to A_arrIdxBlk
-        b = buff + arrIdxBlk*d + sizeof(int)*sizeA;
-        m = buff + arrIdxBlk*d + sizeof(int)*(sizeA+sizeB);
+        b = buff + arrIdxBlk*d + sizeA;
+        m = buff + arrIdxBlk*d + sizeA + sizeB;
         if(elemIdx<sizeA){ // we use sizeA + size B threads
             a[elemIdx] = A[Apoint[arrIdxAll]+elemIdx];
         }else{
@@ -228,7 +228,7 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
         m2 = m1 + d; // d elements
         preSumM1 = m2 + d;  // d+1 prefixsum
         preSumM2 = preSumM1 + d+1; // d+1 prefixsum
-        m[elemIdx] = M[Mpoint[arrIdxAll]+elemIdx];
+        m[elemIdx] = M[Mpoint[arrIdxAll]+elemIdx];//copy to shared memory
         preSumM1[elemIdx] = elemIdx;
         preSumM2[elemIdx] = elemIdx;
         if(elemIdx==0){
@@ -247,7 +247,7 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
         while(turns<ceil(log2(d))){
             even = hidx/2*2;
             odd = even+1;
-            next = odd+2;
+            next = odd+1;
             if(!(hidx==last&&hidx%2==0)){ 
                 // two case: hidx is odd -> paired
                 // hidx is even but not at end of serie -> paired
@@ -264,9 +264,19 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
                 }
             }
             if(turns%2){
-                preSumM1[hidx/2]=preSumM2[even]
+                if(elemIdx-preSumM2[even]==0){//avoid conflict access
+                    preSumM1[hidx/2]=preSumM2[even];
+                }
+                if(elemIdx == 0){
+                    preSumM1[last/2+1]=preSumM1[last+1];// must put the end to last/2+1 in next round
+                }
             }else{
-                preSumM2[hidx/2]=preSumM1[even]
+                if(elemIdx-preSumM1[even]==0){
+                    preSumM2[hidx/2]=preSumM1[even];
+                }
+                if(elemIdx == 0){
+                    preSumM2[last/2+1]=preSumM1[last+1];
+                }
             }
             hidx/=2;
             last/=2;
@@ -444,7 +454,7 @@ void wrapper_q2(int sizeA,int sizeB,int limit){
     cudaMemcpy(d_partition, result, 2*(gridSize+1)*sizeof(int), cudaMemcpyHostToDevice)
 
     cudaEventRecord(start);
-    mergeLarge_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,sizeA,sizeB,result);    
+    mergeLarge_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,sizeA+sizeB,d_partition);    
     cudaEventRecord(stop);
 
     cudaMemcpy(M, d_M, (sizeA+sizeB)*sizeof(int), cudaMemcpyDeviceToHost);
