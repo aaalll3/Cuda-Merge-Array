@@ -61,7 +61,7 @@ __device__ void mergeInKernal(int *sA,int *sB,int sizeA,int sizeB,int *sM,int el
     int Kx,Ky,Px,Py; // K low; P high;
     if(elemIdx>sizeA){
         Kx = elemIdx - sizeA;
-        ky = sizeA;
+        Ky = sizeA;
         Px = sizeA;
         Py = elemIdx - sizeA;
     }else{
@@ -153,7 +153,7 @@ __global__ void mergeLarge_k(int *A, int *B, int *M, int d, int *partition) {
         assert(blockDim.x >= ex+ey-sx-sy); // simplicity check: thread num >= d
     
         int sizesubA = ey - sy;
-        int sizesubB = ex - sx;`
+        int sizesubB = ex - sx;
         int elemIdx = threadIdx.x%(sizesubA+sizesubB);
         int *a,*b,*m;
         a = buff;
@@ -329,15 +329,15 @@ bool checkOrder(int *arr, int size, Compare cmp){
 void query(int*A,int *B, int sizeA,int sizeB, int qidx, int *coord){
     if (qidx < sizeA + sizeB) {
         int Kx, Ky, Px, Py; // K for low point in diag(close to y axis), P for high(close to x axis)
-        if (elemIdx > sizeA) {
-            Kx = elemIdx - sizeA;
+        if (qidx > sizeA) {
+            Kx = qidx - sizeA;
             Ky = sizeA;
             Px = sizeA;
-            Py = elemIdx - sizeA;
+            Py = qidx - sizeA;
         } else {
             Kx = 0;
-            Ky = elemIdx;
-            Px = elemIdx;
+            Ky = qidx;
+            Px = qidx;
             Py = 0;
         }
 
