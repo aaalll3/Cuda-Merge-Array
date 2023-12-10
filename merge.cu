@@ -26,11 +26,6 @@ const int GridSize = 128;
 const int BlockSize = 1024;
 const int MemSize = 2**20;
 
-struct {
-    int x;
-    int y;
-}Tpoint;
-
 /// simple explaination
 /*  suppose we merge A,B two sorted arrays using CUDA
     each thread in charge for one position in result arary M
@@ -80,7 +75,7 @@ __device__ void mergeInKernal(int *sA,int *sB,int sizeA,int sizeB,int *sM,int el
         int Qy = Ky - offset;
 
         if (Qy >= 0 && Qx <= sizeB &&
-            (Qy == sizeA || Qx == 0 || sA[Qy] > sB[Qx - 1])) {
+            (Qy == sizeA || Qx == 0 || sA[Qy] > sB[Qx - 1])) { //
             if (Qx == sizeB || Qy == 0 || sA[Qy - 1] <= sB[Qx]) {
                 if (Qy < sizeA && (Qx == sizeB || sA[Qy] <= sB[Qx])) {
                     sM[elemIdx] = sA[Qy];
@@ -88,11 +83,11 @@ __device__ void mergeInKernal(int *sA,int *sB,int sizeA,int sizeB,int *sM,int el
                     sM[elemIdx] = sB[Qx];
                 }
                 break;
-            } else { 
+            } else { //get higher
                 Kx = Qx + 1;
                 Ky = Qy - 1;
             }
-        } else {
+        } else { //get lower
             Px = Qx - 1;
             Py = Qy + 1;
         }
@@ -197,8 +192,8 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
         //copy to shared memory and synchronized
         int *a,*b,*m;
         a = buff + arrIdxBlk*d; //thread assign to A_arrIdxBlk
-        b = buff + arrIdxBlk*d + sizeA;
-        m = buff + arrIdxBlk*d + sizeA + sizeB;
+        b = a + sizeA;
+        m = b + sizeB;
         if(elemIdx<sizeA){ // we use sizeA + size B threads
             a[elemIdx] = A[Apoint[arrIdxAll]+elemIdx];
         }else{
@@ -228,7 +223,7 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
         m2 = m1 + d; // d elements
         preSumM1 = m2 + d;  // d+1 prefixsum
         preSumM2 = preSumM1 + d+1; // d+1 prefixsum
-        m[elemIdx] = M[Mpoint[arrIdxAll]+elemIdx];//copy to shared memory
+        m1[elemIdx] = M[Mpoint[arrIdxAll]+elemIdx];//copy to shared memory
         preSumM1[elemIdx] = elemIdx;
         preSumM2[elemIdx] = elemIdx;
         if(elemIdx==0){
@@ -248,22 +243,15 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
             even = hidx/2*2;
             odd = even+1;
             next = odd+1;
-            if(!(hidx==last&&hidx%2==0)){ 
-                // two case: hidx is odd -> paired
-                // hidx is even but not at end of serie -> paired
-                if(turns%2){// odd: m2 to m1
+            if(turns%2){
+                if(!(hidx==last&&hidx%2==0)){ 
+                    // two case: hidx is odd -> paired
+                    // hidx is even but not at end of serie -> paired
                     mergeInKernal(m2+preSumM2[even], m2+preSumM2[odd], // merge even(A) odd(B) block
                         preSumM2[odd]-preSumM2[even], preSumM2[next]-preSumM2[odd], // sizeA, sizeB
                         m1+preSumM2[even], // save to M + with all elements before
                         elemIdx-preSumM2[even]); // elemen idx in sub array
-                }else{// even: m1 to m2;
-                    mergeInKernal(m1+preSumM1[even], m1+preSumM1[odd], // merge even(A) odd(B) block
-                        preSumM1[odd]-preSumM1[even], preSumM1[next]-preSumM1[odd], // sizeA, sizeB
-                        m2+preSumM1[even], // save to M + with all elements before
-                        elemIdx-preSumM1[even]); // elemen idx in sub array
                 }
-            }
-            if(turns%2){
                 if(elemIdx-preSumM2[even]==0){//avoid conflict access
                     preSumM1[hidx/2]=preSumM2[even];
                 }
@@ -271,6 +259,12 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
                     preSumM1[last/2+1]=preSumM1[last+1];// must put the end to last/2+1 in next round
                 }
             }else{
+                if(!(hidx==last&&hidx%2==0)){ 
+                    mergeInKernal(m1+preSumM1[even], m1+preSumM1[odd], // merge even(A) odd(B) block
+                        preSumM1[odd]-preSumM1[even], preSumM1[next]-preSumM1[odd], // sizeA, sizeB
+                        m2+preSumM1[even], // save to M + with all elements before
+                        elemIdx-preSumM1[even]); // elemen idx in sub array
+                }
                 if(elemIdx-preSumM1[even]==0){
                     preSumM2[hidx/2]=preSumM1[even];
                 }
@@ -293,8 +287,6 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
 }
 
 // TODO 
-// check shared memory assign
-// check assign back to M
 // 1. debug
 
 typedef int (*Compare)(const void*,const void*);
@@ -408,9 +400,9 @@ void wrapper_q1(int sizeA,int sizeB,int limit){
     cudaFree(d_M);
 
     if(checkOrder(M,sizeA+sizeB,compare_little)){
-        printf("Array M is correct");
+        printf("Array M is correct\n");
     }else{
-        printf("Array M is incorrect");
+        printf("Array M is incorrect\n");
     }
     free(A);
     free(B);
@@ -468,9 +460,9 @@ void wrapper_q2(int sizeA,int sizeB,int limit){
     cudaFree(d_M);
 
     if(checkOrder(M,sizeA+sizeB,compare_little)){
-        printf("Array M is correct");
+        printf("Array M is correct\n");
     }else{
-        printf("Array M is incorrect");
+        printf("Array M is incorrect\n");
     }
     free(A);
     free(B);
@@ -537,9 +529,9 @@ void wrapper_q5(int sizeA,int sizeB, int num, int limit){
 
     for(int i=0;i<num;i++){
         if(checkOrder(M+(sizeA+sizeB)*i,sizeA+sizeB,compare_little)){
-            printf("Array M%d is correct",i);
+            printf("Array M%d is correct\n",i);
         }else{
-            printf("Array M%d is incorrect",i);
+            printf("Array M%d is incorrect\n",i);
         }
     }
     free(A);
@@ -593,9 +585,9 @@ void wrapper_q6(int d, int num, int limit){
 
     for(int i = 0;i<num;i++){
         if(checkOrder(M+d*i,d,compare_little)){
-            printf("Array M%d is correct",i);
+            printf("Array M%d is correct\n",i);
         }else{
-            printf("Array M%d is incorrect");
+            printf("Array M%d is incorrect\n");
         }
     }
     free(M);
