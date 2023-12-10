@@ -641,7 +641,7 @@ void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, 
         if(checkOrder(M+d*i,d,compare_little)){
             printf("Array M%d is correct\n",i);
         }else{
-            printf("Array M%d is incorrect\n");
+            printf("Array M%d is incorrect\n",i);
         }
     }
     // free
