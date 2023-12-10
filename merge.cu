@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <iostream>
 #include <stdlib.h>
-#include <math.h>
+// #include <math.h>
 #include <time.h>
 #include <assert.h>
 #include <cuda_runtime.h>
@@ -9,7 +9,7 @@
 #define CHECK_CUDA_ERROR(err) {checkCuda((err),__LINE__);}
 inline void checkCuda(cudaError_t err, int line, bool quit = true){
     if (err != cudaSuccess) {
-        fprintf(stderr,"Host CudaError: %s at %d\n", cudaGetErrorString(code), line);
+        fprintf(stderr,"Host CudaError: %s at %d\n", cudaGetErrorString(err), line);
         if (quit) exit(err); 
     }
 }
@@ -17,15 +17,15 @@ inline void checkCuda(cudaError_t err, int line, bool quit = true){
 #define CHECK_GPU_ERROR(err) {checkGPU((err),__LINE__);}
 inline void checkGPU(cudaError_t err, int line, bool quit = true){
         if (err != cudaSuccess) {
-            fprintf(stderr,"GPU CudaError: %s at %d\n", cudaGetErrorString(code), line);
+            fprintf(stderr,"GPU CudaError: %s at %d\n", cudaGetErrorString(err), line);
             if (quit) assert(false); 
         }
 }
 
 const int GridSize = 128;
 const int BlockSize = 1024;
-const int MemSize = 2**20;
-const int RandMax = 2**30;
+const int MemSize = pow(2,20);
+const int RandMax = pow(2,30);
 
 /// simple explaination
 /*  suppose we merge A,B two sorted arrays using CUDA
@@ -108,7 +108,7 @@ __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
     assert(blockIdx.x == 0); // only for one block
     assert(blockDim.x >= sizeA+sizeB); // simplicity check
     extern __shared__ int buff[]; // total:2*(sizeA+sizeB)
-    if(threadIdx.x<d){
+    if(threadIdx.x<sizeA+sizeB){
         int elemIdx = threadIdx.x;
         int *a,*b,*m;
         a = buff;
@@ -172,7 +172,7 @@ __global__ void mergeLarge_k(int *A, int *B, int *M, int d, int *partition) {
 }
 
 //q5
-__global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoint, int Num int d){
+__global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoint, int Num, int d){
     // A:  array A on GPU global memory
     // B:  array B on GPU global memory
     // M:  array M on GPU global memory
@@ -220,11 +220,10 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
     assert(Num<=gridDim.x*(blockDim.x/d));
     if(blockIdx.x*(blockDim.x/d)+threadIdx.x/d>=Num)return;
     extern __shared__ int buff[];//total:(4d+2)*num of Array in blk, d of buffer for sort, 2*(d+1) for prefix sum of merge tree
-    if(threadIdx/d<blockDim.x/d){
+    if(threadIdx.x/d<blockDim.x/d){
         int elemIdx = threadIdx.x%d; // element idx in one array
         int arrIdxBlk = (threadIdx.x-elemIdx)/d; // local array idx in this block
         int arrIdxAll = arrIdxBlk + blockIdx.x*(blockDim.x/d); // global array idx
-        if(arrIdxAll>=Num)break;//in case more block than needed 
         // copy to shared memory, only copy needed
         int *m1, *m2, *preSumM1,*preSumM2;
         m1 = buff + arrIdxBlk*(4*d+2); // d elements
@@ -319,7 +318,7 @@ void randomArray(int *arr, int number, int limit, bool sorted){
 
 bool checkOrder(int *arr, int size, Compare cmp){
     for(int i = 0; i < size-1; i++){
-        if (!cmp(arr[i],arr[i+1])){
+        if (!cmp((const void*)(arr+i),(const void*)(arr+i+1))){
             return false;
         }
     }
@@ -347,8 +346,8 @@ void query(int*A,int *B, int sizeA,int sizeB, int qidx, int *coord){
             int Qy = Ky - offset;
 
             if (Qy >= 0 && Qx <= sizeB &&
-                (Qy == sizeA || Qx == 0 || a[Qy] > b[Qx - 1])) {
-                if (Qx == sizeB || Qy == 0 || (Qy < sizeA && a[Qy - 1] <= b[Qx])) {
+                (Qy == sizeA || Qx == 0 || A[Qy] > B[Qx - 1])) {
+                if (Qx == sizeB || Qy == 0 || (Qy < sizeA && A[Qy - 1] <= B[Qx])) {
                     coord[0]=Qx;
                     coord[1]=Qy;
                     return;
@@ -387,9 +386,9 @@ void wrapper_q1(int sizeA, int sizeB, int gridSize=GridSize, int blockSize=Block
     cudaEventCreate(&stop);
     // generate random array on CPU
     int *A,*B,*M;
-    A = malloc(sizeA*sizeof(int));
-    B = malloc(sizeB*sizeof(int));
-    M = malloc((sizeA+sizeB)*sizeof(int));
+    A = (int*)malloc(sizeA*sizeof(int));
+    B = (int*)malloc(sizeB*sizeof(int));
+    M = (int*)malloc((sizeA+sizeB)*sizeof(int));
     randomArray(A,sizeA,limit,sorted);
     randomArray(B,sizeB,limit,sorted);
     // copy to cuda
@@ -412,7 +411,7 @@ void wrapper_q1(int sizeA, int sizeB, int gridSize=GridSize, int blockSize=Block
     cudaEventElapsedTime(&timems, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    pritnf("kernel spent time: %f ms\n",timems);
+    printf("kernel spent time: %f ms\n",timems);
     // free
     cudaFree(d_A);
     cudaFree(d_B);
@@ -449,9 +448,9 @@ void wrapper_q2(int sizeA,int sizeB, int gridSize=GridSize, int blockSize=BlockS
     cudaEventCreate(&stop);
     // generate random array on CPU
     int *A,*B,*M;
-    A = malloc(sizeA*sizeof(int));
-    B = malloc(sizeB*sizeof(int));
-    M = malloc((sizeA+sizeB)*sizeof(int));
+    A = (int*)malloc(sizeA*sizeof(int));
+    B = (int*)malloc(sizeB*sizeof(int));
+    M = (int*)malloc((sizeA+sizeB)*sizeof(int));
     randomArray(A,sizeA,limit,sorted);
     randomArray(B,sizeB,limit,sorted);
     // copy to cuda
@@ -468,7 +467,7 @@ void wrapper_q2(int sizeA,int sizeB, int gridSize=GridSize, int blockSize=BlockS
         query(A,B,sizeA,sizeB,length*i,partition[i*2])
     }
     partition[2*gridSize]=sizeA;
-    partition[2*gridSize+1]=sizeB
+    partition[2*gridSize+1]=sizeB;
     int *d_partition;
     cudaMalloc((void**)&d_partition, 2*(gridSize+1)*sizeof(int));
     cudaMemcpy(d_partition, partition, 2*(gridSize+1)*sizeof(int), cudaMemcpyHostToDevice)
@@ -483,7 +482,7 @@ void wrapper_q2(int sizeA,int sizeB, int gridSize=GridSize, int blockSize=BlockS
     cudaEventElapsedTime(&timems, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    pritnf("kernel spent time: %f ms\n",timems);
+    printf("kernel spent time: %f ms\n",timems);
     // free
     cudaFree(d_A);
     cudaFree(d_B);
@@ -521,11 +520,11 @@ void wrapper_q5(int sizeA,int sizeB, int num, int gridSize=GridSize, int blockSi
     // generate random array on CPU
     int *A,*B,*M;
     int *Apoint,*Bpoint;
-    A = malloc(sizeA*num*sizeof(int));
-    B = malloc(sizeB*num*sizeof(int));
-    M = malloc((sizeA+sizeB)*num*sizeof(int));
-    Apoint = malloc((num+1)*sizeof(int));
-    Bpoint = malloc((num+1)*sizeof(int));
+    A = (int*)malloc(sizeA*num*sizeof(int));
+    B = (int*)malloc(sizeB*num*sizeof(int));
+    M = (int*)malloc((sizeA+sizeB)*num*sizeof(int));
+    Apoint = (int*)malloc((num+1)*sizeof(int));
+    Bpoint = (int*)malloc((num+1)*sizeof(int));
     for(int i=0;i<num;i++){
         if(i){
             Apoint[i]=Apoint[i-1]+sizeA;
@@ -561,7 +560,7 @@ void wrapper_q5(int sizeA,int sizeB, int num, int gridSize=GridSize, int blockSi
     cudaEventElapsedTime(&timems, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    pritnf("kernel spent time: %f ms\n",timems);
+    printf("kernel spent time: %f ms\n",timems);
     // free
     cudaFree(d_A);
     cudaFree(d_B);
@@ -595,8 +594,8 @@ void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, 
         test:
             blockDim >= k*d, k various from 1
     */   
-    assert(blockSize>=sizeA+sizeB);
-    assert(gridSize >= (num+(blockSize/(sizeA+sizeB))-1)/(blockSize/(sizeA+sizeB)));
+    assert(blockSize>=d);
+    assert(gridSize >= (num+(blockSize/d)-1)/(blockSize/d));
     //cuda timer
     float timems = 0;
     cudaEvent_t start, stop; 
@@ -605,13 +604,13 @@ void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, 
     // generate random array on CPU
     int *M;
     int *Mpoint;
-    M = malloc(d*num*sizeof(int));
-    Mpoint = malloc((num+1)*sizeof(int));
+    M = (int*)malloc(d*num*sizeof(int));
+    Mpoint = (int*)malloc((num+1)*sizeof(int));
     for(int i=0;i<num;i++){
         if(i){
             Mpoint[i]=Mpoint[i-1]+d;
         }else{
-            Mpoint[0]=0
+            Mpoint[0]=0;
         }
         randomArray(M+d*i,d,limit,sorted);
     }
@@ -633,7 +632,7 @@ void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, 
     cudaEventElapsedTime(&timems, start, stop);
     cudaEventDestroy(start);
     cudaEventDestroy(stop);
-    pritnf("kernel spent time: %f ms\n",timems);
+    printf("kernel spent time: %f ms\n",timems);
     // free
     cudaFree(d_M);
     cudaFree(d_Mpoint);
