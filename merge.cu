@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <iostream>
 #include <stdlib.h>
-// #include <math.h>
+#include <math.h>
 #include <time.h>
 #include <assert.h>
 #include <cuda_runtime.h>
@@ -245,7 +245,7 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
         int turns = 0; // turns of iteration also height in the tree
         int last = d-1; // notes last block
         int even,odd,next; // easy to read
-        while(turns<ceil(log2(d))){
+        while(turns<ceil(log2((double)d))){
             even = hidx/2*2;
             odd = even+1;
             next = odd+1;
@@ -464,13 +464,13 @@ void wrapper_q2(int sizeA,int sizeB, int gridSize=GridSize, int blockSize=BlockS
     int length = (sizeA+sizeB+gridSize-1)/gridSize; // upper round, only last sub array not full size
     int partition[2*(gridSize+1)];
     for(int i = 0;i<gridSize;i++){
-        query(A,B,sizeA,sizeB,length*i,partition[i*2])
+        query(A,B,sizeA,sizeB,length*i,partition+i*2);
     }
     partition[2*gridSize]=sizeA;
     partition[2*gridSize+1]=sizeB;
     int *d_partition;
     cudaMalloc((void**)&d_partition, 2*(gridSize+1)*sizeof(int));
-    cudaMemcpy(d_partition, partition, 2*(gridSize+1)*sizeof(int), cudaMemcpyHostToDevice)
+    cudaMemcpy(d_partition, partition, 2*(gridSize+1)*sizeof(int), cudaMemcpyHostToDevice);
     // compute
     cudaEventRecord(start,0);
     mergeLarge_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,sizeA+sizeB,d_partition);    
