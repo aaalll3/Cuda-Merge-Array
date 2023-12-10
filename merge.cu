@@ -25,6 +25,7 @@ inline void checkGPU(cudaError_t err, int line, bool quit = true){
 const int GridSize = 128;
 const int BlockSize = 1024;
 const int MemSize = 2**20;
+const int RandMax = 2**30;
 
 /// simple explaination
 /*  suppose we merge A,B two sorted arrays using CUDA
@@ -104,10 +105,10 @@ __global__ void mergeSmall_k(int *A, int *B, int *M, int sizeA, int sizeB) {
     // sizeB: number of elements in B total
     // for this simple case, we only consider enough threads solve enough elements
     // implemented the algorithm in paper
+    assert(blockIdx.x == 0); // only for one block
+    assert(blockDim.x >= sizeA+sizeB); // simplicity check
     extern __shared__ int buff[]; // total:2*(sizeA+sizeB)
     if(threadIdx.x<d){
-        assert(blockIdx.x == 0); // only for one block
-        assert(blockDim.x >= sizeA+sizeB); // simplicity check
         int elemIdx = threadIdx.x;
         int *a,*b,*m;
         a = buff;
@@ -141,6 +142,7 @@ __global__ void mergeLarge_k(int *A, int *B, int *M, int d, int *partition) {
     // to simplify, we assume sizesubA + sizesubB = d <= thread num in block
 
     // we decide the partition uniformly
+    // have to assign just enough blocks
     extern __shared__ int buff[]; //total: 2*(sizesubA+sizesubB) == 2*d
     if (threadIdx.x<d){
         int sx,sy,ex,ey;
@@ -182,6 +184,9 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
     // Apoint idx in [0,Num] with Apoint[Num] is end idx A exclude
     // each block have one pair of AB, suppose sizeA+sizeB = d <= 1024
     // so each block may have to deal with multiple pairs.
+    assert(d<=blockDim.x);
+    assert(Num<=gridDim.x*(blockDim.x/d));
+    if(blockIdx.x*(blockDim.x/d)+threadIdx.x/d>=Num)return;
     extern __shared__ int buff[]; // total: 2*d*Num of pairs in block, this thread only reach out to 2*pairs(for Ai,Bi,Mi specifically)
     if(threadIdx.x/d<blockDim.x/d){ // blockDim.x >= threadIdx.x + 1 -> all entire array covered in block sutisfy this condition
         int elemIdx = threadIdx.x%d; // thread idx in its array (range in 0,d-1)
@@ -191,7 +196,7 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
         int sizeB=Bpoint[arrIdxAll+1]-Bpoint[arrIdxAll];
         //copy to shared memory and synchronized
         int *a,*b,*m;
-        a = buff + arrIdxBlk*d; //thread assign to A_arrIdxBlk
+        a = buff + arrIdxBlk*2*d; //thread assign to A_arrIdxBlk
         b = a + sizeA;
         m = b + sizeB;
         if(elemIdx<sizeA){ // we use sizeA + size B threads
@@ -206,17 +211,20 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
     }
 }
 
-
+//q6
 __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
-    // sort Mi using mergeSmallBatch? Each Block covers entiere array of M in 1st stage log(d)
-    // better d >= num of threads per block
-    // Mpoint is the the start idx of each Mi array in M, i.e prefixsum of sizeMi;
+    // Merge sort Mi = d <= blockDim
+    // Each Block covers entire array of Mi (may be multiple)
+    // Mpoint is the the start idx of each Mi array in M, i.e prefixsum of sizeMi
+    assert(d<=blockDim.x);
+    assert(Num<=gridDim.x*(blockDim.x/d));
+    if(blockIdx.x*(blockDim.x/d)+threadIdx.x/d>=Num)return;
     extern __shared__ int buff[];//total:(4d+2)*num of Array in blk, d of buffer for sort, 2*(d+1) for prefix sum of merge tree
     if(threadIdx/d<blockDim.x/d){
         int elemIdx = threadIdx.x%d; // element idx in one array
         int arrIdxBlk = (threadIdx.x-elemIdx)/d; // local array idx in this block
         int arrIdxAll = arrIdxBlk + blockIdx.x*(blockDim.x/d); // global array idx
-        assert(arrIdxAll<Num);
+        if(arrIdxAll>=Num)break;//in case more block than needed 
         // copy to shared memory, only copy needed
         int *m1, *m2, *preSumM1,*preSumM2;
         m1 = buff + arrIdxBlk*(4*d+2); // d elements
@@ -233,12 +241,11 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
         __syncthreads();
         // split array to 1 element and merge sort
         // simple strategy: each time, merge 2 neighbor(greedy)
-        // worst case 1/3 threads idle, promise log(d)?
-        // (threadIdx.x+d-1)/d>arrIdxBlk why? TODO
-        int hidx = elemIdx; // till ceil(log2(d)) level
-        int turns = 0;
-        int last = d-1;
-        int even,odd,next;
+        // worst case 1/3 threads idle, promise ceil(log(d))
+        int hidx = elemIdx; // idx at current height
+        int turns = 0; // turns of iteration also height in the tree
+        int last = d-1; // notes last block
+        int even,odd,next; // easy to read
         while(turns<ceil(log2(d))){
             even = hidx/2*2;
             odd = even+1;
@@ -361,72 +368,93 @@ void query(int*A,int *B, int sizeA,int sizeB, int qidx, int *coord){
     }
 }
 
-void wrapper_q1(int sizeA,int sizeB,int limit){
-    int gridSize = GridSize;
-    int blockSize = BlockSize;
-    int memSize = MemSize;
-    bool sorted = 1;
+void wrapper_q1(int sizeA, int sizeB, int gridSize=GridSize, int blockSize=BlockSize, int memSize=MemSize, int limit=RandMax, bool sorted = true){
+    /*  allocation stragies
+        must:
+            blockDim >= sizeA + sizeB = d
+            gridDim = 1
+        prefer:
+            blockDim = sizeA + sizeB = d
+        test:
+            blockDim = d, d various
+    */
+    assert(gridSize==1);
+    assert(blockSize>=sizeA+sizeB);
+    //cuda timer
     float timems = 0;
-    cudaEvent_t start, stop; //cuda timer
+    cudaEvent_t start, stop; 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    // play with memory
+    // generate random array on CPU
     int *A,*B,*M;
     A = malloc(sizeA*sizeof(int));
     B = malloc(sizeB*sizeof(int));
     M = malloc((sizeA+sizeB)*sizeof(int));
     randomArray(A,sizeA,limit,sorted);
     randomArray(B,sizeB,limit,sorted);
-    // to cuda
+    // copy to cuda
     int *d_A, *d_B, *d_M;
     cudaMalloc((void**)&d_A, sizeA*sizeof(int));
     cudaMalloc((void**)&d_B, sizeB*sizeof(int));
     cudaMalloc((void**)&d_M, (sizeA+sizeB)*sizeof(int));
     cudaMemcpy(d_A, A, sizeA*sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, B, sizeB*sizeof(int), cudaMemcpyHostToDevice);
-
-    cudaEventRecord(start);
+    // compute
+    cudaEventRecord(start,0);
+    assert(gridSize==1);
+    assert(blockSize>=sizeA+sizeB);
     mergeSmall_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,sizeA,sizeB);    
-    cudaEventRecord(stop);
-
+    cudaEventRecord(stop,0);
+    // copy results from GPU to CPU
     cudaMemcpy(M, d_M, (sizeA+sizeB)*sizeof(int), cudaMemcpyDeviceToHost);
-
+    // timer
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&timems, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     pritnf("kernel spent time: %f ms\n",timems);
-
+    // free
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_M);
-
+    // check result
     if(checkOrder(M,sizeA+sizeB,compare_little)){
         printf("Array M is correct\n");
     }else{
         printf("Array M is incorrect\n");
     }
+    // free
     free(A);
     free(B);
     free(M);
     return;
 }
 
-void wrapper_q2(int sizeA,int sizeB,int limit){
-    int gridSize = GridSize;
-    int blockSize = BlockSize;
-    int memSize = MemSize;
-    bool sorted = 1;
+void wrapper_q2(int sizeA,int sizeB, int gridSize=GridSize, int blockSize=BlockSize, int memSize=MemSize, int limit=RandMax,  bool sorted = true){
+    /*  allocation stragies
+        must:
+            blockDim <= 1024 < sizeA + sizeB 
+            gridDim = ceil((sizeA + sizeB)/blockDim)
+            gridDim > sizeA + sizeB
+        test:
+            blockDim various
+    */
+    assert((sizeA+sizeB+gridSize-1)/gridSize<=1024); // not too few block
+    assert(gridSize>sizeA+sizeB); // not too much block
+    assert((sizeA+sizeB+blockSize-1)/blockSize==gridSize); // make sure simple solution
+    //cuda timer
     float timems = 0;
-    cudaEvent_t start, stop; //cuda timer
+    cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    // play with memory
+    // generate random array on CPU
     int *A,*B,*M;
     A = malloc(sizeA*sizeof(int));
     B = malloc(sizeB*sizeof(int));
     M = malloc((sizeA+sizeB)*sizeof(int));
     randomArray(A,sizeA,limit,sorted);
     randomArray(B,sizeB,limit,sorted);
-    // to cuda
+    // copy to cuda
     int *d_A, *d_B, *d_M;
     cudaMalloc((void**)&d_A, sizeA*sizeof(int));
     cudaMalloc((void**)&d_B, sizeB*sizeof(int));
@@ -434,53 +462,63 @@ void wrapper_q2(int sizeA,int sizeB,int limit){
     cudaMemcpy(d_A, A, sizeA*sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_B, B, sizeB*sizeof(int), cudaMemcpyHostToDevice);
     //split uniformly
-    int length = (sizeA+sizeB+gridSize-1)/gridSize;
-    int result[2*(gridSize+1)];
+    int length = (sizeA+sizeB+gridSize-1)/gridSize; // upper round, only last sub array not full size
+    int partition[2*(gridSize+1)];
     for(int i = 0;i<gridSize;i++){
-        query(A,B,sizeA,sizeB,length*i,result[i*2])
+        query(A,B,sizeA,sizeB,length*i,partition[i*2])
     }
-    result[2*gridSize]=sizeA;
-    result[2*gridSize+1]=sizeB
+    partition[2*gridSize]=sizeA;
+    partition[2*gridSize+1]=sizeB
     int *d_partition;
     cudaMalloc((void**)&d_partition, 2*(gridSize+1)*sizeof(int));
-    cudaMemcpy(d_partition, result, 2*(gridSize+1)*sizeof(int), cudaMemcpyHostToDevice)
-
-    cudaEventRecord(start);
+    cudaMemcpy(d_partition, partition, 2*(gridSize+1)*sizeof(int), cudaMemcpyHostToDevice)
+    // compute
+    cudaEventRecord(start,0);
     mergeLarge_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,sizeA+sizeB,d_partition);    
-    cudaEventRecord(stop);
-
+    cudaEventRecord(stop,0);
+    // copy results from GPU to CPU
     cudaMemcpy(M, d_M, (sizeA+sizeB)*sizeof(int), cudaMemcpyDeviceToHost);
-
+    // timer
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&timems, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     pritnf("kernel spent time: %f ms\n",timems);
-
+    // free
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_M);
-
+    // check result
     if(checkOrder(M,sizeA+sizeB,compare_little)){
         printf("Array M is correct\n");
     }else{
         printf("Array M is incorrect\n");
     }
+    // free
     free(A);
     free(B);
     free(M);
     return;
 }
 
-void wrapper_q5(int sizeA,int sizeB, int num, int limit){
-    // d is sizeA + sizeB
-    int gridSize = GridSize;
-    int blockSize = BlockSize;
-    int memSize = MemSize;
-    bool sorted = 1;
+void wrapper_q5(int sizeA,int sizeB, int num, int gridSize=GridSize, int blockSize=BlockSize, int memSize=MemSize, int limit=RandMax, bool sorted = true){
+    /*  allocation stragies
+        must:
+            blockDim >= sizeA + sizeB = d
+            gridDim >= ceil(num/(blockDim/d))
+        prefer:
+            gridDim = ceil(num/(blockDim/d))
+        test:
+            blockDim >= k*(sizeA + sizeB), k various from 1
+    */
+    assert(blockSize>=sizeA+sizeB);
+    assert(gridSize >= (num+(blockSize/(sizeA+sizeB))-1)/(blockSize/(sizeA+sizeB)));
+    //cuda timer
     float timems = 0;
-    cudaEvent_t start, stop; //cuda timer
+    cudaEvent_t start, stop;
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    // play with memory
+    // generate random array on CPU
     int *A,*B,*M;
     int *Apoint,*Bpoint;
     A = malloc(sizeA*num*sizeof(int));
@@ -501,8 +539,8 @@ void wrapper_q5(int sizeA,int sizeB, int num, int limit){
     }
     Apoint[num]=Apoint[num-1]+sizeA;
     Bpoint[num]=Bpoint[num-1]+sizeB;
-    // to cuda
-    int *d_A, *d_B, *d_M,*d_Apoint,*d_Bpoint;
+    // copy to cuda
+    int *d_A, *d_B, *d_M, *d_Apoint, *d_Bpoint;
     cudaMalloc((void**)&d_A, sizeA*num*sizeof(int));
     cudaMalloc((void**)&d_B, sizeB*num*sizeof(int));
     cudaMalloc((void**)&d_M, (sizeA+sizeB)*num* sizeof(int));
@@ -513,20 +551,24 @@ void wrapper_q5(int sizeA,int sizeB, int num, int limit){
     cudaMemcpy(d_Apoint, Apoint, (num+1)*sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_Bpoint, Bpoint, (num+1)*sizeof(int), cudaMemcpyHostToDevice);
     //compute
-    cudaEventRecord(start);
+    cudaEventRecord(start,0);
     mergeSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,Apoint,Bpoint,num,sizeA+sizeB);    
-    cudaEventRecord(stop);
-
+    cudaEventRecord(stop,0);
+    // copy results from GPU to CPU
     cudaMemcpy(M, d_M, (sizeA+sizeB)*num*sizeof(int), cudaMemcpyDeviceToHost);
-
+    // timer
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&timems, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     pritnf("kernel spent time: %f ms\n",timems);
-
+    // free
     cudaFree(d_A);
     cudaFree(d_B);
     cudaFree(d_M);
-
+    cudaFree(d_Apoint);
+    cudaFree(d_Bpoint);
+    // check result
     for(int i=0;i<num;i++){
         if(checkOrder(M+(sizeA+sizeB)*i,sizeA+sizeB,compare_little)){
             printf("Array M%d is correct\n",i);
@@ -534,22 +576,33 @@ void wrapper_q5(int sizeA,int sizeB, int num, int limit){
             printf("Array M%d is incorrect\n",i);
         }
     }
+    // free
     free(A);
     free(B);
     free(M);
+    free(Apoint);
+    free(Bpoint);
     return;
 }
 
-void wrapper_q6(int d, int num, int limit){
-    int gridSize = GridSize;
-    int blockSize = BlockSize;
-    int memSize = MemSize;
-    bool sorted = 0;
+void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, int memSize=MemSize, int limit=RandMax, bool sorted = false){
+    /*  allocation stragies
+        must:
+            blockDim >= d
+            gridDim >= ceil(num/(blockDim/d))
+        prefer:
+            gridDim = ceil(num/(blockDim/d))
+        test:
+            blockDim >= k*d, k various from 1
+    */   
+    assert(blockSize>=sizeA+sizeB);
+    assert(gridSize >= (num+(blockSize/(sizeA+sizeB))-1)/(blockSize/(sizeA+sizeB)));
+    //cuda timer
     float timems = 0;
-    cudaEvent_t start, stop; //cuda timer
+    cudaEvent_t start, stop; 
     cudaEventCreate(&start);
     cudaEventCreate(&stop);
-    // play with memory
+    // generate random array on CPU
     int *M;
     int *Mpoint;
     M = malloc(d*num*sizeof(int));
@@ -563,26 +616,28 @@ void wrapper_q6(int d, int num, int limit){
         randomArray(M+d*i,d,limit,sorted);
     }
     Mpoint[num]=Mpoint[num-1]+d;
-    // to cuda
+    // copy to cuda
     int *d_M,*d_Mpoint;
     cudaMalloc((void**)&d_M, d*num*sizeof(int));
     cudaMalloc((void**)&d_Mpoint, (num+1)*sizeof(int));
     cudaMemcpy(d_M, M, d*num*sizeof(int), cudaMemcpyHostToDevice);
     cudaMemcpy(d_Mpoint, Mpoint, (num+1)*sizeof(int), cudaMemcpyHostToDevice);
     //compute
-    cudaEventRecord(start);
+    cudaEventRecord(start,0);
     sortSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_M,Mpoint,num,d);
-    cudaEventRecord(stop);
-
+    cudaEventRecord(stop,0);
+    // copy results from GPU to CPU
     cudaMemcpy(M, d_M, d*num*sizeof(int), cudaMemcpyDeviceToHost);
-
+    // timer
     cudaEventSynchronize(stop);
     cudaEventElapsedTime(&timems, start, stop);
+    cudaEventDestroy(start);
+    cudaEventDestroy(stop);
     pritnf("kernel spent time: %f ms\n",timems);
-
+    // free
     cudaFree(d_M);
     cudaFree(d_Mpoint);
-
+    // check result
     for(int i = 0;i<num;i++){
         if(checkOrder(M+d*i,d,compare_little)){
             printf("Array M%d is correct\n",i);
@@ -590,9 +645,22 @@ void wrapper_q6(int d, int num, int limit){
             printf("Array M%d is incorrect\n");
         }
     }
+    // free
     free(M);
     free(Mpoint);
     return;
+}
+
+void debug_q(){
+    int sizeA=32;
+    int sizeB=32;
+    int d=64;
+    int num=4;
+    int gridSize =1; 
+    int blockSize =64;
+    int memSize =MemSize;
+
+    wrapper_q1(sizeA,sizeB,gridSize,blockSize,memSize);
 }
 
 int main() {
