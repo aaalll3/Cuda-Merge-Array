@@ -585,9 +585,6 @@ void wrapper_q1(int sizeA, int sizeB, int gridSize=GridSize, int blockSize=Block
     printf("CUDA Execution Time: %f ms\n",timems);
 
 
-
-    
-    
     // free
     CHECK_CUDA_ERROR(cudaFree(d_A));
     CHECK_CUDA_ERROR(cudaFree(d_B));
@@ -717,6 +714,7 @@ void wrapper_q2(int sizeA,int sizeB, int gridSize=GridSize, int blockSize=BlockS
     free(A);
     free(B);
     free(M);
+    free(M_sequ);
     return;
 }
 
@@ -946,24 +944,27 @@ void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, 
     }
     // free
     free(M);
+    free(M_sequ);
     free(Mpoint);
     return;
 }
 
-void debug_q1(){
+void result_q1(){
+    // Set the value of sizeA, sizeB, limit, ensuring that sizeA + sizeB <= 1024.
     int sizeA=400;
     int sizeB=400;
+    int limit = 1000;
+    
     int d=sizeA+sizeB;
-    // int num=4;
     int gridSize =1; 
     int blockSize =sizeA+sizeB;
     int memSize =d*sizeof(int)*2;
-    int limit = 1000;
-
+    
     wrapper_q1(sizeA,sizeB,gridSize,blockSize,memSize,limit);
 }
 
-void debug_q2(){
+void result_q2(){
+    // Set the value of sizeA, sizeB, limit
     int sizeA = 512;
     int sizeB = 512;
     int limit = 1000;
@@ -976,9 +977,11 @@ void debug_q2(){
     wrapper_q2(sizeA,sizeB,gridSize,blockSize,memSize,limit);
 }
 
-void debug_q5(){
-    int sizeA = 10;
-    int sizeB = 10;
+void result_q5(){
+    // Set the value of sizeA, sizeB, num, limit, ensuring that sizeA + sizeB <= 1024.
+
+    int sizeA = 512;
+    int sizeB = 256;
     int num = 100;
     int limit = 1000;
 
@@ -994,19 +997,22 @@ void debug_q5(){
     wrapper_q5(sizeA,sizeB,num,gridSize,blockSize,memSize,limit);
 }
 
-void debug_q6(){
+void result_q6(){
+    // Set the value of sizeA, sizeB, num, limit, ensuring d < 1024;
+
     int d = 256;
     int num = 8;
+    int limit = 1000;
     
-    int gridSize = 4;
-    int blockSize = 512;
+    int gridSize = 4; // Ensure that gridSize * blockSize = num * d and gridSize <= num;
+    int blockSize = (num*d)/gridSize;
     int memSize = (4*d+2)*((num+gridSize-1)/gridSize)*sizeof(int);
     printf("Memsize:%d\n",memSize);
-    int limit = 1000;
+    
     wrapper_q6(d,num,gridSize,blockSize,memSize,limit);
 }
 
 int main() {
-    debug_q1();
+    result_q5();
     return 0;
 }
