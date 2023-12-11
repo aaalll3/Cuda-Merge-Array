@@ -314,10 +314,14 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d,int height)
         // cudaError_t cudaError = cudaGetLastError();
         // CHECK_GPU_ERROR(cudaError);
         while(turns<height){
-            if(DEBUGGING)printf("Im %dblk %dth-%dhidx @ %dturn\n",blockIdx.x,threadIdx.x,hidx,turns);
             even = hidx/2*2;
             odd = even+1;
             next = odd+1;
+            // if(turns%2){
+            //     if(DEBUGGING)printf("Im %dblk %dth-%dhidx-%delem @ %dturn\n",blockIdx.x,threadIdx.x,hidx,elemIdx-preSumM2[even],turns);
+            // }else{
+            //     if(DEBUGGING)printf("Im %dblk %dth-%dhidx-%delem @ %dturn\n",blockIdx.x,threadIdx.x,hidx,elemIdx-preSumM1[even],turns);
+            // }
             if(turns%2){
                 if(!(hidx==last&&hidx%2==0)){ 
                     // two case: hidx is odd -> paired
@@ -331,7 +335,7 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d,int height)
                     preSumM1[hidx/2]=preSumM2[even];
                 }
                 if(elemIdx == 0){
-                    preSumM1[last/2+1]=preSumM1[last+1];// must put the end to last/2+1 in next round
+                    preSumM1[last/2+1]=preSumM2[last+1];// must put the end to last/2+1 in next round
                 }
             }else{
                 if(!(hidx==last&&hidx%2==0)){ 
@@ -803,7 +807,7 @@ void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, 
         printf(">>>DEBUGGING\n");
         printf("result check\n");
         for(int i =0;i<num;i++){
-            printf("M%d origin:\n",i);
+            printf("M%d new:\n",i);
             for(int j=0;j<d;j++){
                 printf("%d, ",M[i*d+j]);
             }
