@@ -853,12 +853,12 @@ void debug_q2(){
 }
 
 void debug_q5(){
-    int sizeA = 32;
-    int sizeB = 32;
+    int sizeA = 256;
+    int sizeB = 256;
     int num = 4;
     int d= sizeA+sizeB;
     int gridSize = 2;
-    int blockSize = 128;
+    int blockSize = 1024;
     int memSize = 2*d*((num+gridSize-1)/gridSize)*sizeof(int);
     printf("Memsize:%d\n",memSize);
     int limit = 1000;
@@ -880,6 +880,6 @@ void debug_q6(){
 }
 
 int main() {
-    debug_q6();
+    debug_q5();
     return 0;
 }
