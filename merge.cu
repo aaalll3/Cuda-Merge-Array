@@ -685,7 +685,7 @@ void wrapper_q5(int sizeA,int sizeB, int num, int gridSize=GridSize, int blockSi
     //compute
     CHECK_CUDA_ERROR(cudaEventRecord(start,0));
     // stupid_k<<<gridSize,blockSize>>>();
-    mergeSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,Apoint,Bpoint,num,sizeA+sizeB);    
+    mergeSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_A,d_B,d_M,d_Apoint,d_Bpoint,num,sizeA+sizeB);    
     CHECK_CUDA_ERROR(cudaEventRecord(stop,0));
     // copy results from GPU to CPU
     CHECK_CUDA_ERROR(cudaMemcpy(M, d_M, (sizeA+sizeB)*num*sizeof(int), cudaMemcpyDeviceToHost));
@@ -848,7 +848,8 @@ void debug_q5(){
     int d= sizeA+sizeB;
     int gridSize = 2;
     int blockSize = 128;
-    int memSize = (4*d+2)*sizeof(int);
+    int memSize = 2*d*num*sizeof(int);
+    printf("Memsize:%d\n",memSize);
     int limit = 1000;
     wrapper_q5(sizeA,sizeB,num,gridSize,blockSize,memSize,limit);
 }
@@ -860,7 +861,8 @@ void debug_q6(){
     int d= sizeA+sizeB;
     int gridSize = 2;
     int blockSize = 64;
-    int memSize = 2*(d+gridSize-1)/gridSize*sizeof(int);
+    int memSize = 2*((d+gridSize-1)/gridSize)*sizeof(int);
+    printf("Memsize:%d\n",memSize);
     int limit = 1000;
     wrapper_q2(sizeA,sizeB,gridSize,blockSize,memSize,limit);
 }
