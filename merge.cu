@@ -15,9 +15,9 @@ inline void checkCuda(cudaError_t err, int line, bool quit = true){
 }
 
 #define CHECK_GPU_ERROR(err) {checkGPU((err),__LINE__);}
-inline void checkGPU(cudaError_t err, int line, bool quit = true){
+__device__ void checkGPU(cudaError_t err, int line, bool quit = true){
         if (err != cudaSuccess) {
-            fprintf(stderr,"GPU CudaError: %s at %d\n", cudaGetErrorString(err), line);
+            printf("GPU CudaError: %s at %d\n", cudaGetErrorString(err), line);
             if (quit) assert(false); 
         }
 }
@@ -268,7 +268,7 @@ __global__ void mergeSmallBatch_k(int *A, int *B, int *M, int* Apoint, int *Bpoi
 }
 
 //q6
-__global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
+__global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d,int height){
     // Merge sort Mi = d <= blockDim
     // Each Block covers entire array of Mi (may be multiple)
     // Mpoint is the the start idx of each Mi array in M, i.e prefixsum of sizeMi
@@ -308,7 +308,13 @@ __global__ void sortSmallBatch_k(int *M, int *Mpoint, int Num, int d){
         int turns = 0; // turns of iteration also height in the tree
         int last = d-1; // notes last block
         int even,odd,next; // easy to read
-        while(turns<ceil(log2((double)d))){
+        // CHECK_GPU_ERROR(__log2f((float)d));
+        if(DEBUGGING&&elemIdx==0)printf("d is %d\n",d);
+        if(DEBUGGING&&elemIdx==0)printf("turn max %d\n",height);
+        // cudaError_t cudaError = cudaGetLastError();
+        // CHECK_GPU_ERROR(cudaError);
+        while(turns<height){
+            if(DEBUGGING)printf("Im %dblk %dth-%dhidx @ %dturn\n",blockIdx.x,threadIdx.x,hidx,turns);
             even = hidx/2*2;
             odd = even+1;
             next = odd+1;
@@ -739,6 +745,7 @@ void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, 
     */   
     assert(blockSize>=d);
     assert(gridSize >= (num+(blockSize/d)-1)/(blockSize/d));
+    int height = ceil(log2(d));
     //cuda timer
     float timems = 0;
     cudaEvent_t start, stop; 
@@ -778,7 +785,7 @@ void wrapper_q6(int d, int num, int gridSize=GridSize, int blockSize=BlockSize, 
     CHECK_CUDA_ERROR(cudaMemcpy(d_Mpoint, Mpoint, (num+1)*sizeof(int), cudaMemcpyHostToDevice));
     //compute
     CHECK_CUDA_ERROR(cudaEventRecord(start,0));
-    sortSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_M,Mpoint,num,d);
+    sortSmallBatch_k<<<gridSize,blockSize,memSize>>>(d_M,d_Mpoint,num,d,height);
     CHECK_CUDA_ERROR(cudaEventRecord(stop,0));
     // copy results from GPU to CPU
     CHECK_CUDA_ERROR(cudaMemcpy(M, d_M, d*num*sizeof(int), cudaMemcpyDeviceToHost));
@@ -848,7 +855,7 @@ void debug_q5(){
     int d= sizeA+sizeB;
     int gridSize = 2;
     int blockSize = 128;
-    int memSize = 2*d*num*sizeof(int);
+    int memSize = 2*d*((num+gridSize-1)/gridSize)*sizeof(int);
     printf("Memsize:%d\n",memSize);
     int limit = 1000;
     wrapper_q5(sizeA,sizeB,num,gridSize,blockSize,memSize,limit);
@@ -856,18 +863,19 @@ void debug_q5(){
 
 
 void debug_q6(){
-    int sizeA = 64;
-    int sizeB = 64;
+    int sizeA = 32;
+    int sizeB = 32;
+    int num = 4;
     int d= sizeA+sizeB;
     int gridSize = 2;
-    int blockSize = 64;
-    int memSize = 2*((d+gridSize-1)/gridSize)*sizeof(int);
+    int blockSize = 128;
+    int memSize = (4*d+2)*((num+gridSize-1)/gridSize)*sizeof(int);
     printf("Memsize:%d\n",memSize);
     int limit = 1000;
-    wrapper_q2(sizeA,sizeB,gridSize,blockSize,memSize,limit);
+    wrapper_q6(d,num,gridSize,blockSize,memSize,limit);
 }
 
 int main() {
-    debug_q5();
+    debug_q6();
     return 0;
 }
