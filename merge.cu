@@ -165,18 +165,18 @@ __global__ void mergeLarge_k(int *A, int *B, int *M, int d, int *partition) {
     // we decide the partition uniformly
     // have to assign just enough blocks
     // if(DEBUGGING)printf("Im %d#%dth\n",blockIdx.x,threadIdx.x);
+    int sx,sy,ex,ey;
+    sy = partition[2*blockIdx.x];
+    sx = partition[2*blockIdx.x+1];
+    ey = partition[2*(blockIdx.x+1)];
+    ex = partition[2*(blockIdx.x+1)+1];
     extern __shared__ int buff[]; //total: 2*(sizesubA+sizesubB) == 2*d
-    if (threadIdx.x<d){
-        int sx,sy,ex,ey;
-        sx = partition[2*blockIdx.x];
-        sy = partition[2*blockIdx.x+1];
-        ex = partition[2*(blockIdx.x+1)];
-        ey = partition[2*(blockIdx.x+1)+1];
+    if (threadIdx.x<ex+ey-sx-sy){
         // assert(blockDim.x >= ex+ey-sx-sy); // simplicity check: thread num >= d
     
         int sizesubA = ey - sy;
         int sizesubB = ex - sx;
-        int elemIdx = threadIdx.x%(sizesubA+sizesubB);
+        int elemIdx = threadIdx.x;
         int *a,*b,*m;
         a = buff;
         b = a+sizesubA;
@@ -186,6 +186,7 @@ __global__ void mergeLarge_k(int *A, int *B, int *M, int d, int *partition) {
         }else{
             b[elemIdx-sizesubA] = B[elemIdx - sizesubA + sx];
         }
+        // if(DEBUGGING)printf("Im %dblk %dth %delem\n",blockIdx.x,threadIdx.x,elemIdx);
         if(elemIdx==0&&DEBUGGING){
             printf("Im %dblk %dth %delem\n",blockIdx.x,threadIdx.x,elemIdx);
             printf("a shared #%d:\n",sizesubA);
@@ -431,8 +432,8 @@ void query(int*A,int *B, int sizeA,int sizeB, int qidx, int *coord){
             if (Qy >= 0 && Qx <= sizeB &&
                 (Qy == sizeA || Qx == 0 || A[Qy] > B[Qx - 1])) {
                 if (Qx == sizeB || Qy == 0 || (Qy < sizeA && A[Qy - 1] <= B[Qx])) {
-                    coord[0]=Qx;
-                    coord[1]=Qy;
+                    coord[0]=Qy;
+                    coord[1]=Qx;
                     return;
                 } else {
                     Kx = Qx + 1;
@@ -842,11 +843,11 @@ void debug_q1(){
 }
 
 void debug_q2(){
-    int sizeA = 64;
-    int sizeB = 64;
+    int sizeA = 512;
+    int sizeB = 256;
     int d= sizeA+sizeB;
-    int gridSize = 2;
-    int blockSize = 64;
+    int gridSize = 4;
+    int blockSize = 200;
     int memSize = 2*((d+gridSize-1)/gridSize)*sizeof(int);
     int limit = 1000;
     wrapper_q2(sizeA,sizeB,gridSize,blockSize,memSize,limit);
@@ -880,6 +881,6 @@ void debug_q6(){
 }
 
 int main() {
-    debug_q5();
+    debug_q2();
     return 0;
 }
