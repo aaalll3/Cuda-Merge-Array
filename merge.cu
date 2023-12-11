@@ -318,7 +318,8 @@ void randomArray(int *arr, int number, int limit, bool sorted){
 
 bool checkOrder(int *arr, int size, Compare cmp){
     for(int i = 0; i < size-1; i++){
-        if (!cmp((const void*)(arr+i),(const void*)(arr+i+1))){
+        if (cmp((const void*)(arr+i),(const void*)(arr+i+1))>0){
+            printf("err M[%d]:%d  M[%d]:%d\n",i,arr[i],i+1,arr[i+1]);
             return false;
         }
     }
@@ -663,7 +664,6 @@ void debug_q(){
 }
 
 int main() {
-    int sizeA, sizeB, limit;
-    wrapper_q1(sizeA,sizeB,limit);
+    debug_q();
     return 0;
 }
