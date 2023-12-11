@@ -40,6 +40,18 @@ int main() {
         // Add more information as needed
         std::cout << std::endl;
     }
+    
+    int deviceId;
+    cudaGetDevice(&deviceId);
+
+    cudaDeviceProp deviceProp;
+    cudaGetDeviceProperties(&deviceProp, deviceId);
+
+    std::cout << "Device Name: " << deviceProp.name << std::endl;
+    std::cout << "Max Grid Dimensions: [" << deviceProp.maxGridSize[0] << ", "
+              << deviceProp.maxGridSize[1] << ", " << deviceProp.maxGridSize[2] << "]" << std::endl;
+    std::cout << "Max Block Dimensions: [" << deviceProp.maxThreadsDim[0] << ", "
+              << deviceProp.maxThreadsDim[1] << ", " << deviceProp.maxThreadsDim[2] << "]" << std::endl;
 
     return 0;
 }
